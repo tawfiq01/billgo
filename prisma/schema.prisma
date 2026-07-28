@@ -1,0 +1,79 @@
+// Core entities for the Enterprise Bill Management System.
+// Money amounts are computed at query time from BillItem/Payment rows
+// (subtotal, tax, total, balance) rather than cached on Bill, so nothing
+// can drift out of sync with the underlying line items or payments.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BillStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  MOBILE_BANKING
+  OTHER
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  company   String?
+  bills     Bill[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Bill {
+  id         String     @id @default(cuid())
+  billNumber String     @unique
+  customer   Customer   @relation(fields: [customerId], references: [id])
+  customerId String
+  issueDate  DateTime   @default(now())
+  dueDate    DateTime
+  status     BillStatus @default(DRAFT)
+  taxRate    Float      @default(0)
+  notes      String?
+  items      BillItem[]
+  payments   Payment[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model BillItem {
+  id          String @id @default(cuid())
+  bill        Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId      String
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float
+  sortOrder   Int    @default(0)
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  bill      Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billId    String
+  amount    Float
+  method    PaymentMethod @default(CASH)
+  reference String?
+  paidAt    DateTime      @default(now())
+  notes     String?
+  createdAt DateTime      @default(now())
+}
