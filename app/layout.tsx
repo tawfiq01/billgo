@@ -18,8 +18,14 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const user = await getCurrentUser();
 
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
-      <body className="min-h-full">{user ? <AppShell user={user}>{children}</AppShell> : children}</body>
+    <html lang="en" className={`${inter.variable} h-full antialiased`} suppressHydrationWarning>
+      {/* Browser extensions (Grammarly, ColorZilla, etc.) inject attributes
+          like data-gr-ext-installed / cz-shortcut-listen onto <body> before
+          React hydrates — suppressHydrationWarning here is the documented
+          fix, not a mask for a real app bug. */}
+      <body className="min-h-full" suppressHydrationWarning>
+        {user ? <AppShell user={user}>{children}</AppShell> : children}
+      </body>
     </html>
   );
 }
