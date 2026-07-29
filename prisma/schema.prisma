@@ -42,15 +42,18 @@ model User {
   manager      User?     @relation("ManagerReports", fields: [managerId], references: [id])
   reports      User[]    @relation("ManagerReports")
 
-  headOfDept       Department[]   @relation("DepartmentHead")
-  headOfDivision   Division[]     @relation("DivisionHead")
-  managerOfProject Project[]      @relation("ProjectManager")
-  claims           Claim[]
-  approvalSteps    ApprovalStep[]
-  attachments      Attachment[]
-  paymentsRecorded Payment[]
-  notifications    Notification[]
-  auditLogs        AuditLog[]
+  headOfDept            Department[]   @relation("DepartmentHead")
+  headOfDivision        Division[]     @relation("DivisionHead")
+  managerOfProject      Project[]      @relation("ProjectManager")
+  claims                Claim[]
+  approvalSteps         ApprovalStep[] @relation("StepApprover")
+  delegatedApprovalSteps ApprovalStep[] @relation("StepDelegatedFrom")
+  delegationsGiven      Delegation[]   @relation("DelegationDelegator")
+  delegationsReceived   Delegation[]   @relation("DelegationDelegate")
+  attachments           Attachment[]
+  paymentsRecorded      Payment[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -350,16 +353,42 @@ model ApprovalStep {
   stageOrder   Int
   requiredRole String
   approverId   String?
-  approver     User?     @relation(fields: [approverId], references: [id])
+  approver     User?     @relation("StepApprover", fields: [approverId], references: [id])
+  // Set when approverId was resolved via an active Delegation (BR-19) rather
+  // than directly — the original approver whose authority is being used.
+  delegatedFromId String?
+  delegatedFrom   User?  @relation("StepDelegatedFrom", fields: [delegatedFromId], references: [id])
   // PENDING | APPROVED | RETURNED | REJECTED | SKIPPED
   status       String    @default("PENDING")
   comments     String?
   actedAt      DateTime?
+  // Set once an SLA escalation reminder has been sent for this step (FR-019),
+  // so re-running the check doesn't notify the same overdue step repeatedly.
+  escalatedAt  DateTime?
 
   createdAt DateTime @default(now())
 
   @@index([claimId, stageOrder])
   @@index([approverId, status])
+}
+
+// FR-018/BR-19: an approver may delegate their approval authority to another
+// user for a bounded period (e.g. while on leave). Resolution happens at
+// ApprovalStep-creation time in lib/workflow.ts — the delegate becomes the
+// step's approver, with delegatedFromId recording whose authority it was.
+model Delegation {
+  id          String   @id @default(cuid())
+  delegatorId String
+  delegator   User     @relation("DelegationDelegator", fields: [delegatorId], references: [id])
+  delegateId  String
+  delegate    User     @relation("DelegationDelegate", fields: [delegateId], references: [id])
+  startDate   DateTime
+  endDate     DateTime
+  reason      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([delegatorId, startDate, endDate])
 }
 
 model Payment {

@@ -139,6 +139,20 @@ export const holidayRateFormSchema = z.object({
   effectiveTo: z.coerce.date().optional(),
 });
 
+export const policyParameterFormSchema = z.object({
+  key: z.string().min(1),
+  value: z.string().min(1),
+});
+
+export const delegationFormSchema = z
+  .object({
+    delegateId: z.string().min(1, "Choose who you're delegating to"),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
+    reason: z.string().optional(),
+  })
+  .refine((v) => v.endDate >= v.startDate, { message: "End date must be on or after the start date", path: ["endDate"] });
+
 export const approvalStageRuleFormSchema = z.object({
   claimType: z.enum([...CLAIM_TYPES, "ANY"]),
   minAmount: z.coerce.number().nonnegative().default(0),

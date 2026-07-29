@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { employeeClaimStatement } from "@/lib/reports";
 import { ReportTable } from "@/components/report-table";
@@ -15,7 +14,7 @@ export default async function EmployeeStatementReportPage({
 
   return (
     <div>
-      <form method="get" className="flex flex-wrap items-center gap-3">
+      <form method="get" className="flex flex-wrap items-center gap-3 print:hidden">
         <select name="employeeId" defaultValue={selected} className="field-input w-auto">
           {employees.map((e) => (
             <option key={e.id} value={e.id}>
@@ -26,14 +25,9 @@ export default async function EmployeeStatementReportPage({
         <button type="submit" className="btn-secondary">
           View
         </button>
-        {selected && (
-          <Link href={`/api/reports/employee-statement?employeeId=${selected}`} className="btn-secondary">
-            Download CSV
-          </Link>
-        )}
       </form>
       <div className="mt-6">
-        <ReportTable rows={rows} />
+        <ReportTable rows={rows} csvHref={selected ? `/api/reports/employee-statement?employeeId=${selected}` : undefined} />
       </div>
     </div>
   );

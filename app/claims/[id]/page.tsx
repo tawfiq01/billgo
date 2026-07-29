@@ -16,11 +16,13 @@ import {
   cancelClaimAction,
   copyClaimAction,
   recordPaymentAction,
+  reopenClaimAction,
   submitClaimAction,
   uploadAttachmentAction,
   withdrawClaimAction,
 } from "@/app/claims/actions";
 import { NavigateOnSuccessButton } from "./navigate-on-success-button";
+import { PrintButton } from "@/components/print-button";
 
 const currency = new Intl.NumberFormat("en-BD", { style: "currency", currency: "BDT" });
 const dateFmt = (d: Date) => d.toLocaleDateString();
@@ -43,7 +45,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
       faLines: true,
       haLines: true,
       attachments: { include: { uploadedBy: true } },
-      approvalSteps: { include: { approver: true }, orderBy: { createdAt: "asc" } },
+      approvalSteps: { include: { approver: true, delegatedFrom: true }, orderBy: { createdAt: "asc" } },
       payments: { include: { recordedBy: true } },
     },
   });
@@ -73,9 +75,12 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
             {claim.project && ` · Project: ${claim.project.name}`}
           </p>
         </div>
-        <span className="badge bg-accent/15 text-accent">
-          {CLAIM_STATUS_LABELS[claim.status as ClaimStatus] ?? claim.status}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="badge bg-accent/15 text-accent">
+            {CLAIM_STATUS_LABELS[claim.status as ClaimStatus] ?? claim.status}
+          </span>
+          <PrintButton />
+        </div>
       </div>
 
       <div className="card">
@@ -240,7 +245,10 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
         </ul>
 
         {isOwner && claim.status === "DRAFT" && (
-          <ActionForm action={uploadAttachmentAction.bind(null, claim.id)} className="mt-4 flex items-center gap-3">
+          <ActionForm
+            action={uploadAttachmentAction.bind(null, claim.id)}
+            className="mt-4 flex items-center gap-3 print:hidden"
+          >
             <input suppressHydrationWarning type="file" name="file" required className="text-sm" />
             <button type="submit" className="btn-secondary">
               Upload
@@ -255,8 +263,11 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
           {claim.approvalSteps.map((s) => (
             <li key={s.id} className="border-b border-border pb-2 last:border-0">
               <span className="font-medium">{STAGE_ROLE_LABELS[s.requiredRole as StageRole] ?? s.requiredRole}</span>{" "}
-              — {s.status === "SKIPPED" ? "not applicable for this claim" : (s.approver?.name ?? "unassigned")} —{" "}
-              <span className="badge bg-background text-muted">{s.status}</span>
+              — {s.status === "SKIPPED" ? "not applicable for this claim" : (s.approver?.name ?? "unassigned")}
+              {s.delegatedFrom && (
+                <span className="text-muted"> (delegate for {s.delegatedFrom.name})</span>
+              )}{" "}
+              — <span className="badge bg-background text-muted">{s.status}</span>
               {s.comments && <p className="mt-1 text-muted">&ldquo;{s.comments}&rdquo;</p>}
               {s.actedAt && <p className="mt-1 text-xs text-muted">{dateTimeFmt(s.actedAt)}</p>}
             </li>
@@ -290,7 +301,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
         </TableCard>
       )}
 
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-4 print:hidden">
         {isOwner && claim.status === "DRAFT" && (
           <>
             <Link href={`/claims/${claim.id}/edit`} className="btn-secondary">
@@ -331,7 +342,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
       </div>
 
       {myPendingStep && (
-        <div className="card">
+        <div className="card print:hidden">
           <h2 className="text-sm font-semibold">Your approval</h2>
           <ActionForm action={approvalActionOnStep.bind(null, myPendingStep.id)} className="mt-3 space-y-3">
             <textarea name="comments" className="field-input" placeholder="Comments (required for return/reject)" />
@@ -363,7 +374,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
       )}
 
       {claim.status === "APPROVED" && (user.role === "PAYMENT_PROCESSOR" || isAdmin) && (
-        <div className="card">
+        <div className="card print:hidden">
           <h2 className="text-sm font-semibold">Record payment</h2>
           <ActionForm action={recordPaymentAction.bind(null, claim.id)} className="mt-3 grid gap-3 sm:grid-cols-4">
             <select name="method" className="field-input">
@@ -393,12 +404,32 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
       )}
 
       {(isAdmin || user.role === "FINANCE") && !["PAID", "CLOSED", "CANCELLED"].includes(claim.status) && (
-        <div className="card">
+        <div className="card print:hidden">
           <h2 className="text-sm font-semibold">Administrative cancellation</h2>
           <ActionForm action={cancelClaimAction.bind(null, claim.id)} className="mt-3 flex gap-3" confirmMessage="Cancel this claim?">
             <input suppressHydrationWarning name="reason" className="field-input" placeholder="Cancellation reason" required />
             <button type="submit" className="btn-danger">
               Cancel claim
+            </button>
+          </ActionForm>
+        </div>
+      )}
+
+      {(isAdmin || user.role === "FINANCE") && ["PAID", "CLOSED"].includes(claim.status) && (
+        <div className="card print:hidden">
+          <h2 className="text-sm font-semibold">Reopen claim</h2>
+          <p className="mt-1 text-xs text-muted">
+            For example, if the recorded payment was reversed and needs to be re-issued. The prior payment stays in
+            the Payment Register, marked failed.
+          </p>
+          <ActionForm
+            action={reopenClaimAction.bind(null, claim.id)}
+            className="mt-3 flex gap-3"
+            confirmMessage="Reopen this claim? It will return to Approved status."
+          >
+            <input suppressHydrationWarning name="reason" className="field-input" placeholder="Reason for reopening" required />
+            <button type="submit" className="btn-danger">
+              Reopen claim
             </button>
           </ActionForm>
         </div>

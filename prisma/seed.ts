@@ -9,6 +9,7 @@ import { hashPassword } from "../lib/password";
 import { createDraftClaim, submitClaim } from "../lib/claims";
 import { actOnApprovalStep, WorkflowError } from "../lib/workflow";
 import { recordPayment } from "../lib/claims";
+import { createDelegation } from "../lib/delegation";
 import type { NewClaimInput } from "../lib/validation";
 
 const DEV_PASSWORD = "Passw0rd!";
@@ -16,6 +17,7 @@ const DEV_PASSWORD = "Passw0rd!";
 async function wipe() {
   await prisma!.notification.deleteMany();
   await prisma!.auditLog.deleteMany();
+  await prisma!.delegation.deleteMany();
   await prisma!.payment.deleteMany();
   await prisma!.approvalStep.deleteMany();
   await prisma!.attachment.deleteMany();
@@ -130,7 +132,7 @@ async function main() {
     },
   });
 
-  await prisma.user.create({
+  const auditor = await prisma.user.create({
     data: {
       employeeId: "EMP-0006",
       name: "Tania Akter",
@@ -293,6 +295,8 @@ async function main() {
     data: [
       { key: "DA_FULL_DAY_HOUR_THRESHOLD", value: "12" },
       { key: "FA_FULL_DAY_HOUR_THRESHOLD", value: "12" },
+      { key: "BULK_APPROVE_MAX_AMOUNT", value: "5000" },
+      { key: "APPROVAL_SLA_DAYS", value: "3" },
     ],
   });
 
@@ -554,6 +558,44 @@ async function main() {
   await submitClaim(projectRoutedClaim.id, employee2.id);
   await approveAsRole(projectRoutedClaim.id, manager.id);
   await approveAsRole(projectRoutedClaim.id, deptHead.id);
+
+  // j) Delegation demo (BR-19) — Manager delegates to the Auditor for a
+  // window covering today, then a claim submitted afterward shows the
+  // Manager stage resolving to the delegate instead of Shirin herself.
+  console.log("Creating a delegation and a claim that routes through it...");
+  const today = new Date();
+  const delegationStart = new Date(today);
+  delegationStart.setDate(delegationStart.getDate() - 1);
+  const delegationEnd = new Date(today);
+  delegationEnd.setDate(delegationEnd.getDate() + 5);
+  await createDelegation(manager.id, {
+    delegateId: auditor.id,
+    startDate: delegationStart,
+    endDate: delegationEnd,
+    reason: "Annual leave",
+  });
+
+  const delegatedClaim = await createDraftClaim(employee1.id, {
+    claimType: "TA",
+    purpose: "Quick vendor drop-off",
+    advanceAmount: 0,
+    travelSegments: [
+      {
+        origin: "Dhaka",
+        destination: "Narayanganj",
+        departureAt: new Date("2026-09-12T09:00:00"),
+        returnAt: new Date("2026-09-12T17:00:00"),
+        mode: "CAR",
+        fare: 700,
+      },
+    ],
+    expenseLines: [],
+    daLines: [],
+    faLines: [],
+    haLines: [],
+  } satisfies NewClaimInput);
+  await attachPlaceholder(delegatedClaim.id, employee1.id);
+  await submitClaim(delegatedClaim.id, employee1.id);
 
   console.log("\nSeed complete.");
   console.log(`All seeded users share the password: ${DEV_PASSWORD}`);

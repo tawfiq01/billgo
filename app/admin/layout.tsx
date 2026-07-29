@@ -11,6 +11,7 @@ const TABS = [
   { href: "/admin/holidays", label: "Holiday Calendar" },
   { href: "/admin/rates", label: "Allowance Rates" },
   { href: "/admin/approval-matrix", label: "Approval Matrix" },
+  { href: "/admin/policy", label: "Policy Parameters" },
   { href: "/admin/audit-log", label: "Audit Log" },
 ];
 

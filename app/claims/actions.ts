@@ -9,6 +9,7 @@ import {
   copyClaimAsDraft,
   createDraftClaim,
   recordPayment,
+  reopenClaim,
   resubmitClaim,
   submitClaim,
   updateDraftClaim,
@@ -17,6 +18,7 @@ import {
 import { actOnApprovalStep } from "@/lib/workflow";
 import { approvalActionSchema, newClaimSchema, paymentSchema } from "@/lib/validation";
 import { errorMessage, type ActionResult } from "@/lib/action-result";
+import { ADMIN_ROLES } from "@/lib/constants";
 
 export async function createDraftClaimAction(input: unknown): Promise<ActionResult<{ claimId: string }>> {
   try {
@@ -92,8 +94,29 @@ export async function cancelClaimAction(claimId: string, formData: FormData): Pr
   try {
     const user = await getCurrentUser();
     if (!user) return { ok: false, error: "Not authenticated." };
+    // Server-side check — the page only hides this form from other roles,
+    // it doesn't stop a direct call to this action.
+    if (!ADMIN_ROLES.includes(user.role) && user.role !== "FINANCE") {
+      return { ok: false, error: "Only Finance or an Administrator can cancel a claim." };
+    }
     const reason = String(formData.get("reason") ?? "");
     await cancelClaim(claimId, user.id, reason);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function reopenClaimAction(claimId: string, formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    if (!ADMIN_ROLES.includes(user.role) && user.role !== "FINANCE") {
+      return { ok: false, error: "Only Finance or an Administrator can reopen a claim." };
+    }
+    const reason = String(formData.get("reason") ?? "");
+    await reopenClaim(claimId, user.id, reason);
     revalidatePath(`/claims/${claimId}`);
     return { ok: true };
   } catch (err) {
@@ -158,6 +181,9 @@ export async function recordPaymentAction(claimId: string, formData: FormData): 
   try {
     const user = await getCurrentUser();
     if (!user) return { ok: false, error: "Not authenticated." };
+    if (!ADMIN_ROLES.includes(user.role) && user.role !== "PAYMENT_PROCESSOR") {
+      return { ok: false, error: "Only the Payment Processor or an Administrator can record a payment." };
+    }
     const parsed = paymentSchema.parse({
       method: formData.get("method"),
       reference: formData.get("reference") ?? undefined,

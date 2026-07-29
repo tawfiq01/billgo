@@ -19,8 +19,8 @@ export async function AppShell({ user, children }: { user: SessionUser; children
   const canViewReports = REPORT_ROLES.includes(user.role);
 
   return (
-    <div className="min-h-svh">
-      <header className="border-b border-border bg-card">
+    <div className="min-h-svh print:bg-white">
+      <header className="border-b border-border bg-card print:hidden">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <Link href="/dashboard" className="flex items-center gap-2.5">
             <Image src="/logo.png" alt="Billgo" width={101} height={72} priority className="h-8 w-auto" />
@@ -54,6 +54,9 @@ export async function AppShell({ user, children }: { user: SessionUser; children
                 Admin
               </Link>
             )}
+            <Link href="/delegations" className="hover:text-foreground">
+              Delegations
+            </Link>
             <Link href="/notifications" className="hover:text-foreground">
               Notifications
               {unreadNotifications > 0 && (
@@ -74,7 +77,7 @@ export async function AppShell({ user, children }: { user: SessionUser; children
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-10">{children}</main>
+      <main className="mx-auto max-w-6xl px-6 py-10 print:max-w-none print:p-0">{children}</main>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { prisma } from "./db";
 
 const DEFAULT_FULL_DAY_HOUR_THRESHOLD = 12;
 
-async function getPolicyNumber(key: string, fallback: number): Promise<number> {
+export async function getPolicyNumber(key: string, fallback: number): Promise<number> {
   if (!prisma) return fallback;
   const row = await prisma.policyParameter.findUnique({ where: { key } });
   if (!row) return fallback;

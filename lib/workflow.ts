@@ -1,7 +1,22 @@
 import { prisma } from "./db";
 import { writeAudit } from "./audit";
 import { notify } from "./notifications";
+import { findActiveDelegate } from "./delegation";
+import { getPolicyNumber } from "./calculations";
 import { OPTIONAL_STAGE_ROLES, STAGE_ROLE_TO_STATUS, type StageRole } from "./constants";
+
+const DEFAULT_BULK_APPROVE_MAX_AMOUNT = 5000;
+
+// BR-19: if the resolved approver has an active Delegation on this date,
+// the delegate takes over the step; delegatedFromId keeps the original
+// approver visible in the approval history.
+async function applyDelegation(
+  baseApproverId: string,
+  onDate: Date,
+): Promise<{ approverId: string; delegatedFromId: string | null }> {
+  const delegateId = await findActiveDelegate(baseApproverId, onDate);
+  return delegateId ? { approverId: delegateId, delegatedFromId: baseApproverId } : { approverId: baseApproverId, delegatedFromId: null };
+}
 
 export class WorkflowError extends Error {}
 
@@ -106,15 +121,22 @@ export async function buildApprovalSteps(claimId: string, actingUserId: string):
   }
 
   const ctx: ApproverContext = { employee: claim.employee, projectId: claim.projectId };
-  const steps: { stageOrder: number; requiredRole: StageRole; approverId: string | null; status: "PENDING" | "SKIPPED" }[] =
-    [];
+  const now = new Date();
+  const steps: {
+    stageOrder: number;
+    requiredRole: StageRole;
+    approverId: string | null;
+    delegatedFromId: string | null;
+    status: "PENDING" | "SKIPPED";
+  }[] = [];
   for (const stage of orderedStages) {
     const requiredRole = stage.requiredRole as StageRole;
     const result = await resolveApprover(requiredRole, ctx);
     if (result.kind === "resolved") {
-      steps.push({ stageOrder: stage.stageOrder, requiredRole, approverId: result.approverId, status: "PENDING" });
+      const { approverId, delegatedFromId } = await applyDelegation(result.approverId, now);
+      steps.push({ stageOrder: stage.stageOrder, requiredRole, approverId, delegatedFromId, status: "PENDING" });
     } else if (result.kind === "skip" && OPTIONAL_STAGE_ROLES.includes(requiredRole)) {
-      steps.push({ stageOrder: stage.stageOrder, requiredRole, approverId: null, status: "SKIPPED" });
+      steps.push({ stageOrder: stage.stageOrder, requiredRole, approverId: null, delegatedFromId: null, status: "SKIPPED" });
     } else {
       const reason = result.kind === "error" ? result.message : "this stage does not apply to the claim";
       throw new WorkflowError(`Cannot route the ${requiredRole} stage: ${reason}.`);
@@ -307,9 +329,17 @@ export async function reopenCurrentStage(claimId: string, actingUserId: string):
     const reason = result.kind === "error" ? result.message : "this stage no longer applies to the claim";
     throw new WorkflowError(`Cannot route the ${requiredRole} stage: ${reason}.`);
   }
+  const { approverId, delegatedFromId } = await applyDelegation(result.approverId, new Date());
 
   await prisma.approvalStep.create({
-    data: { claimId, stageOrder: lastStep.stageOrder, requiredRole: lastStep.requiredRole, approverId: result.approverId, status: "PENDING" },
+    data: {
+      claimId,
+      stageOrder: lastStep.stageOrder,
+      requiredRole: lastStep.requiredRole,
+      approverId,
+      delegatedFromId,
+      status: "PENDING",
+    },
   });
   await prisma.claim.update({
     where: { id: claimId },
@@ -317,10 +347,54 @@ export async function reopenCurrentStage(claimId: string, actingUserId: string):
   });
 
   await notify({
-    userId: result.approverId,
+    userId: approverId,
     type: "CLAIM_RESUBMITTED",
     message: `Claim ${claim.claimNumber ?? claim.id} was resubmitted and is awaiting your approval.`,
     claimId,
   });
   await writeAudit({ userId: actingUserId, action: "CLAIM_RESUBMITTED", entityType: "Claim", entityId: claimId });
+}
+
+export async function getBulkApproveThreshold(): Promise<number> {
+  return getPolicyNumber("BULK_APPROVE_MAX_AMOUNT", DEFAULT_BULK_APPROVE_MAX_AMOUNT);
+}
+
+export type BulkApproveResult = {
+  approved: string[];
+  failed: { stepId: string; error: string }[];
+};
+
+// FR-017: bulk approval for "eligible low-risk claims" — re-checks the
+// amount threshold per step server-side (not just trusting which
+// checkboxes the client sent) and still runs every claim through the
+// ordinary single-step approval path, so nothing about audit/notification/
+// next-stage-routing is special-cased for the bulk case.
+export async function bulkApproveSteps(stepIds: string[], actingUserId: string): Promise<BulkApproveResult> {
+  if (!prisma) throw new WorkflowError("Database not configured");
+  const threshold = await getBulkApproveThreshold();
+
+  const result: BulkApproveResult = { approved: [], failed: [] };
+  for (const stepId of stepIds) {
+    try {
+      const step = await prisma.approvalStep.findUniqueOrThrow({ where: { id: stepId }, include: { claim: true } });
+      if (step.claim.totalClaimed > threshold) {
+        throw new WorkflowError(
+          `Above the bulk-approve limit (${threshold}) — review individually.`,
+        );
+      }
+      await actOnApprovalStep({ stepId, actingUserId, action: "APPROVE", comments: "Bulk approved." });
+      result.approved.push(stepId);
+    } catch (err) {
+      result.failed.push({ stepId, error: err instanceof Error ? err.message : "Unknown error" });
+    }
+  }
+
+  await writeAudit({
+    userId: actingUserId,
+    action: "BULK_APPROVE",
+    entityType: "ApprovalStep",
+    after: result,
+  });
+
+  return result;
 }

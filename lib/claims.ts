@@ -501,4 +501,44 @@ export async function recordPayment(input: RecordPaymentInput) {
   return payment;
 }
 
+// FR-037: Finance/Admin may reopen a Paid/Closed claim under controlled
+// authorization (e.g. a payment was reversed and needs re-recording). The
+// prior payment is marked FAILED rather than deleted, so it stays in the
+// Payment Register / audit trail instead of silently disappearing.
+export async function reopenClaim(claimId: string, actingUserId: string, reason: string): Promise<void> {
+  if (!prisma) throw new ClaimError("Database not configured");
+  if (!reason.trim()) throw new ClaimError("A reason is required to reopen a claim.");
+
+  const claim = await prisma.claim.findUniqueOrThrow({ where: { id: claimId }, include: { payments: true } });
+  if (!["PAID", "CLOSED"].includes(claim.status)) {
+    throw new ClaimError("Only paid or closed claims can be reopened.");
+  }
+
+  const lastPayment = claim.payments.at(-1);
+  await prisma.$transaction([
+    ...(lastPayment
+      ? [prisma.payment.update({ where: { id: lastPayment.id }, data: { status: "FAILED" } })]
+      : []),
+    prisma.claim.update({
+      where: { id: claimId },
+      data: { status: "APPROVED", closedAt: null, financeNotes: reason },
+    }),
+  ]);
+
+  await notify({
+    userId: claim.employeeId,
+    type: "CLAIM_REOPENED",
+    message: `Your claim ${claim.claimNumber ?? claim.id} was reopened: ${reason}`,
+    claimId,
+  });
+  await writeAudit({
+    userId: actingUserId,
+    action: "CLAIM_REOPENED",
+    entityType: "Claim",
+    entityId: claimId,
+    before: { status: claim.status },
+    after: { status: "APPROVED", reason },
+  });
+}
+
 export { fullClaimInclude };

@@ -2,12 +2,22 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { REPORT_ROLES } from "@/lib/constants";
 import {
+  advanceAdjustmentReport,
   approvalAgingReport,
+  auditTrailReport,
+  costCenterReport,
   departmentSummary,
   employeeClaimStatement,
+  holidayAllowanceReport,
+  managementDashboardKPIs,
   monthlySummary,
+  paymentRegister,
+  policyExceptionReport,
+  rejectedReturnedAnalysis,
   statusReport,
+  taxVatReport,
   toCSV,
+  travelRouteCostReport,
 } from "@/lib/reports";
 
 export async function GET(request: Request, { params }: { params: Promise<{ report: string }> }) {
@@ -38,6 +48,36 @@ export async function GET(request: Request, { params }: { params: Promise<{ repo
       break;
     case "approval-aging":
       rows = await approvalAgingReport();
+      break;
+    case "policy-exception":
+      rows = await policyExceptionReport();
+      break;
+    case "payment-register":
+      rows = await paymentRegister();
+      break;
+    case "advance-adjustment":
+      rows = await advanceAdjustmentReport();
+      break;
+    case "holiday-allowance":
+      rows = await holidayAllowanceReport();
+      break;
+    case "travel-route-cost":
+      rows = await travelRouteCostReport();
+      break;
+    case "cost-center":
+      rows = await costCenterReport();
+      break;
+    case "audit-trail":
+      rows = await auditTrailReport();
+      break;
+    case "rejected-returned":
+      rows = await rejectedReturnedAnalysis();
+      break;
+    case "tax-vat":
+      rows = await taxVatReport();
+      break;
+    case "management-dashboard":
+      rows = await managementDashboardKPIs();
       break;
     default:
       return NextResponse.json({ error: "Unknown report" }, { status: 404 });

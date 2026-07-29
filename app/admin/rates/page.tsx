@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { ActionForm } from "@/components/action-form";
+import { VersionBadge } from "@/components/version-badge";
 import {
   createAllowanceRateAction,
   createFoodAllowanceRateAction,
@@ -37,6 +38,7 @@ export default async function AdminRatesPage() {
               <th>Daily rate</th>
               <th>Effective from</th>
               <th>Effective to</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
@@ -48,6 +50,9 @@ export default async function AdminRatesPage() {
                 <td>{currency.format(r.dailyRate)}</td>
                 <td>{r.effectiveFrom.toLocaleDateString()}</td>
                 <td>{r.effectiveTo ? r.effectiveTo.toLocaleDateString() : "—"}</td>
+                <td>
+                  <VersionBadge effectiveFrom={r.effectiveFrom} effectiveTo={r.effectiveTo} />
+                </td>
                 <td>
                   <ActionForm action={deleteAllowanceRateAction.bind(null, r.id)} confirmMessage="Delete this rate?">
                     <button type="submit" className="text-sm text-danger hover:underline">
@@ -86,6 +91,7 @@ export default async function AdminRatesPage() {
               <th>Daily rate</th>
               <th>Effective from</th>
               <th>Effective to</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
@@ -97,6 +103,9 @@ export default async function AdminRatesPage() {
                 <td>{currency.format(r.dailyRate)}</td>
                 <td>{r.effectiveFrom.toLocaleDateString()}</td>
                 <td>{r.effectiveTo ? r.effectiveTo.toLocaleDateString() : "—"}</td>
+                <td>
+                  <VersionBadge effectiveFrom={r.effectiveFrom} effectiveTo={r.effectiveTo} />
+                </td>
                 <td>
                   <ActionForm action={deleteFoodAllowanceRateAction.bind(null, r.id)} confirmMessage="Delete this rate?">
                     <button type="submit" className="text-sm text-danger hover:underline">
@@ -135,6 +144,7 @@ export default async function AdminRatesPage() {
               <th>Multiplier</th>
               <th>Effective from</th>
               <th>Effective to</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
@@ -146,6 +156,9 @@ export default async function AdminRatesPage() {
                 <td>{r.multiplier}x</td>
                 <td>{r.effectiveFrom.toLocaleDateString()}</td>
                 <td>{r.effectiveTo ? r.effectiveTo.toLocaleDateString() : "—"}</td>
+                <td>
+                  <VersionBadge effectiveFrom={r.effectiveFrom} effectiveTo={r.effectiveTo} />
+                </td>
                 <td>
                   <ActionForm action={deleteHolidayRateAction.bind(null, r.id)} confirmMessage="Delete this rate?">
                     <button type="submit" className="text-sm text-danger hover:underline">
