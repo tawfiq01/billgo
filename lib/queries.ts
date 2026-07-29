@@ -1,60 +1,91 @@
 import { prisma } from "./db";
+import type { ClaimStatus } from "./constants";
 
 export type DashboardStats = {
-  customerCount: number;
-  outstandingTotal: number;
-  paidThisMonthTotal: number;
-  overdueCount: number;
+  draftCount: number;
+  pendingCount: number;
+  pendingAmount: number;
+  returnedCount: number;
+  approvedCount: number;
+  approvedAmount: number;
+  paidCount: number;
+  paidAmount: number;
 };
 
 const EMPTY_STATS: DashboardStats = {
-  customerCount: 0,
-  outstandingTotal: 0,
-  paidThisMonthTotal: 0,
-  overdueCount: 0,
+  draftCount: 0,
+  pendingCount: 0,
+  pendingAmount: 0,
+  returnedCount: 0,
+  approvedCount: 0,
+  approvedAmount: 0,
+  paidCount: 0,
+  paidAmount: 0,
 };
 
-function billTotal(items: { quantity: number; unitPrice: number }[], taxRate: number): number {
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-  return subtotal * (1 + taxRate);
-}
+const PENDING_STATUSES: ClaimStatus[] = [
+  "SUBMITTED",
+  "PENDING_MANAGER",
+  "PENDING_DEPT_HEAD",
+  "PENDING_FINANCE",
+  "PENDING_FINAL_APPROVAL",
+];
 
-// Zeroed placeholder when the database isn't configured yet, so the
-// dashboard renders instead of crashing before a DATABASE_URL exists.
-export async function getDashboardStats(): Promise<DashboardStats> {
+// FR-002: employee dashboard counts/amounts by status. Every user is a
+// potential claimant regardless of role, so this is scoped to the viewer.
+export async function getDashboardStats(employeeId: string): Promise<DashboardStats> {
   if (!prisma) return EMPTY_STATS;
   try {
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    const claims = await prisma.claim.findMany({ where: { employeeId } });
 
-    const [customerCount, openBills, overdueCount, paidThisMonth] = await Promise.all([
-      prisma.customer.count(),
-      prisma.bill.findMany({
-        where: { status: { in: ["SENT", "PARTIALLY_PAID", "OVERDUE"] } },
-        include: { items: true, payments: true },
-      }),
-      prisma.bill.count({ where: { status: "OVERDUE" } }),
-      prisma.payment.aggregate({
-        where: { paidAt: { gte: startOfMonth } },
-        _sum: { amount: true },
-      }),
-    ]);
-
-    const outstandingTotal = openBills.reduce((sum, bill) => {
-      const total = billTotal(bill.items, bill.taxRate);
-      const paid = bill.payments.reduce((s, p) => s + p.amount, 0);
-      return sum + Math.max(total - paid, 0);
-    }, 0);
+    const pending = claims.filter((c) => PENDING_STATUSES.includes(c.status as ClaimStatus));
+    const approved = claims.filter((c) => c.status === "APPROVED");
+    const paid = claims.filter((c) => c.status === "PAID" || c.status === "CLOSED");
 
     return {
-      customerCount,
-      outstandingTotal,
-      paidThisMonthTotal: paidThisMonth._sum.amount ?? 0,
-      overdueCount,
+      draftCount: claims.filter((c) => c.status === "DRAFT").length,
+      pendingCount: pending.length,
+      pendingAmount: pending.reduce((s, c) => s + c.totalClaimed, 0),
+      returnedCount: claims.filter((c) => c.status === "RETURNED").length,
+      approvedCount: approved.length,
+      approvedAmount: approved.reduce((s, c) => s + c.totalApproved, 0),
+      paidCount: paid.length,
+      paidAmount: paid.reduce((s, c) => s + c.payableAmount, 0),
     };
   } catch (error) {
-    console.error("Database query failed, serving empty dashboard:", error);
+    console.error("Dashboard query failed, serving empty stats:", error);
     return EMPTY_STATS;
+  }
+}
+
+export async function getRecentClaims(employeeId: string, take = 5) {
+  if (!prisma) return [];
+  try {
+    return await prisma.claim.findMany({
+      where: { employeeId },
+      orderBy: { updatedAt: "desc" },
+      take,
+    });
+  } catch (error) {
+    console.error("Recent claims query failed:", error);
+    return [];
+  }
+}
+
+export async function getPendingApprovalCount(userId: string): Promise<number> {
+  if (!prisma) return 0;
+  try {
+    return await prisma.approvalStep.count({ where: { approverId: userId, status: "PENDING" } });
+  } catch {
+    return 0;
+  }
+}
+
+export async function getUnreadNotificationCount(userId: string): Promise<number> {
+  if (!prisma) return 0;
+  try {
+    return await prisma.notification.count({ where: { userId, read: false } });
+  } catch {
+    return 0;
   }
 }

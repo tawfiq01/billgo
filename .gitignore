@@ -12,6 +12,13 @@
 .env
 .env*.local
 
+# local sqlite dev database
+/dev.db
+/dev.db-journal
+
+# uploaded claim attachments (local disk storage — Phase 1 only)
+/uploads
+
 # vercel
 .vercel
 

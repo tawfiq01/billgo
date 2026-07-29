@@ -1,79 +1,420 @@
-// Core entities for the Enterprise Bill Management System.
-// Money amounts are computed at query time from BillItem/Payment rows
-// (subtotal, tax, total, balance) rather than cached on Bill, so nothing
-// can drift out of sync with the underlying line items or payments.
+// Core entities for the TA, DA & HA (Travel/Daily/Holiday Allowance) Management
+// System — see docs/BRD.md and the Phase 1 plan for the full requirements this
+// maps to.
+//
+// Provider is sqlite for Phase 1 (zero-setup local dev — see lib/db.ts).
+// SQLite has no native enum type, so "enum-like" fields below are plain
+// String columns; allowed values are documented inline and enforced in
+// lib/constants.ts + zod schemas at the application layer.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
-enum BillStatus {
-  DRAFT
-  SENT
-  PARTIALLY_PAID
-  PAID
-  OVERDUE
-  CANCELLED
+// ---------------------------------------------------------------------------
+// Organization & identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  employeeId   String    @unique
+  name         String
+  email        String    @unique
+  passwordHash String
+  // Role: EMPLOYEE | MANAGER | DEPT_HEAD | FINANCE | FINAL_APPROVER |
+  //       PAYMENT_PROCESSOR | HR_ADMIN | SYSTEM_ADMIN | AUDITOR
+  role         String
+  // ACTIVE | INACTIVE
+  status       String    @default("ACTIVE")
+  departmentId String?
+  department   Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  divisionId   String?
+  division     Division? @relation("DivisionMembers", fields: [divisionId], references: [id])
+  designation  String?
+  grade        String?
+  costCenter   String?
+  location     String?
+  managerId    String?
+  manager      User?     @relation("ManagerReports", fields: [managerId], references: [id])
+  reports      User[]    @relation("ManagerReports")
+
+  headOfDept       Department[]   @relation("DepartmentHead")
+  headOfDivision   Division[]     @relation("DivisionHead")
+  managerOfProject Project[]      @relation("ProjectManager")
+  claims           Claim[]
+  approvalSteps    ApprovalStep[]
+  attachments      Attachment[]
+  paymentsRecorded Payment[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([managerId])
+  @@index([departmentId])
+  @@index([divisionId])
 }
 
-enum PaymentMethod {
-  CASH
-  BANK_TRANSFER
-  CARD
-  MOBILE_BANKING
-  OTHER
-}
+model Department {
+  id         String  @id @default(cuid())
+  name       String  @unique
+  headUserId String?
+  head       User?   @relation("DepartmentHead", fields: [headUserId], references: [id])
+  members    User[]  @relation("DepartmentMembers")
 
-model Customer {
-  id        String   @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  company   String?
-  bills     Bill[]
+  approvalRules ApprovalStageRule[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
-model Bill {
-  id         String     @id @default(cuid())
-  billNumber String     @unique
-  customer   Customer   @relation(fields: [customerId], references: [id])
-  customerId String
-  issueDate  DateTime   @default(now())
-  dueDate    DateTime
-  status     BillStatus @default(DRAFT)
-  taxRate    Float      @default(0)
-  notes      String?
-  items      BillItem[]
-  payments   Payment[]
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+// A second, independent organizational axis alongside Department (e.g. a
+// business unit spanning several departments) — the approval matrix can
+// scope a stage by division just like it does by department.
+model Division {
+  id         String  @id @default(cuid())
+  name       String  @unique
+  headUserId String?
+  head       User?   @relation("DivisionHead", fields: [headUserId], references: [id])
+  members    User[]  @relation("DivisionMembers")
+
+  approvalRules ApprovalStageRule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-model BillItem {
-  id          String @id @default(cuid())
-  bill        Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
-  billId      String
-  description String
-  quantity    Float  @default(1)
-  unitPrice   Float
-  sortOrder   Int    @default(0)
+// Projects have exactly one project manager, who can be routed to as an
+// approval stage (PROJECT_MANAGER) for claims tied to that project.
+model Project {
+  id               String  @id @default(cuid())
+  name             String  @unique
+  code             String?
+  projectManagerId String
+  projectManager   User    @relation("ProjectManager", fields: [projectManagerId], references: [id])
+  status           String  @default("ACTIVE") // ACTIVE | INACTIVE
+
+  claims Claim[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Policy configuration (admin-maintained, effective-dated per BR-18/FR-035)
+// ---------------------------------------------------------------------------
+
+model HolidayCalendarEntry {
+  id   String   @id @default(cuid())
+  date DateTime
+  name String
+  // NATIONAL | REGIONAL | SPECIAL
+  type String
+
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
+
+// Drives DA calculation (FR-006, BR-05). Rates are illustrative examples
+// pending the real policy tables the BRD (Appendix C) leaves as open items.
+model AllowanceRate {
+  id               String    @id @default(cuid())
+  grade            String
+  locationCategory String
+  dailyRate        Float
+  effectiveFrom    DateTime
+  effectiveTo      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([grade, locationCategory])
+}
+
+// Drives FA (Food Allowance) calculation — same shape/mechanism as DA, kept
+// as its own rate table since food and per-diem rates are typically set
+// independently in policy.
+model FoodAllowanceRate {
+  id               String    @id @default(cuid())
+  grade            String
+  locationCategory String
+  dailyRate        Float
+  effectiveFrom    DateTime
+  effectiveTo      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([grade, locationCategory])
+}
+
+// Drives HA calculation (FR-007, BR-07/BR-08).
+model HolidayRate {
+  id            String    @id @default(cuid())
+  grade         String? // null = applies to any grade
+  rate          Float
+  multiplier    Float     @default(1)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+
+  createdAt DateTime @default(now())
+}
+
+// Simple key/value policy knobs, e.g. "DA_FULL_DAY_HOUR_THRESHOLD" (BR-06).
+model PolicyParameter {
+  key   String @id
+  value String
+}
+
+// Configurable approval matrix (FR-028, BR-10).
+model ApprovalStageRule {
+  id           String  @id @default(cuid())
+  // TA | DA | HA | COMBINED | ANY
+  claimType    String
+  minAmount    Float   @default(0)
+  maxAmount    Float?
+  departmentId String? // null = applies to any department
+  department   Department? @relation(fields: [departmentId], references: [id])
+  divisionId   String? // null = applies to any division
+  division     Division? @relation(fields: [divisionId], references: [id])
+  stageOrder   Int
+  // MANAGER (employee.managerId) | DEPT_HEAD (employee's department head) |
+  // DIVISION_HEAD (employee's division head, skipped if no division) |
+  // PROJECT_MANAGER (claim's project manager, skipped if no project) |
+  // FINANCE | FINAL_APPROVER
+  requiredRole String
+
+  createdAt DateTime @default(now())
+
+  @@index([claimType, stageOrder])
+}
+
+// ---------------------------------------------------------------------------
+// Claims
+// ---------------------------------------------------------------------------
+
+model Claim {
+  id          String  @id @default(cuid())
+  // Assigned on submission (BP-04), not on draft creation — null while DRAFT.
+  claimNumber String? @unique
+
+  employeeId String
+  employee   User   @relation(fields: [employeeId], references: [id])
+  projectId  String? // optional — enables the PROJECT_MANAGER approval stage
+  project    Project? @relation(fields: [projectId], references: [id])
+
+  // TA | DA | FA | HA | COMBINED
+  claimType String
+  purpose   String
+
+  // DRAFT | SUBMITTED | PENDING_MANAGER | PENDING_DEPT_HEAD |
+  // PENDING_DIVISION_HEAD | PENDING_PROJECT_MANAGER | PENDING_FINANCE |
+  // PENDING_FINAL_APPROVAL | RETURNED | REJECTED | APPROVED |
+  // PAYMENT_PROCESSING | PAID | CANCELLED | CLOSED | ON_HOLD
+  status            String @default("DRAFT")
+  currentStageOrder Int    @default(0)
+
+  totalClaimed  Float @default(0)
+  totalEligible Float @default(0)
+  totalApproved Float @default(0)
+  advanceAmount Float @default(0)
+  payableAmount Float @default(0)
+  financeNotes  String?
+
+  submittedAt DateTime?
+  closedAt    DateTime?
+
+  travelSegments TravelSegment[]
+  expenseLines   ExpenseLine[]
+  daLines        DACalculationLine[]
+  faLines        FACalculationLine[]
+  haLines        HACalculationLine[]
+  attachments    Attachment[]
+  approvalSteps  ApprovalStep[]
+  payments       Payment[]
+  notifications  Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+}
+
+model TravelSegment {
+  id          String   @id @default(cuid())
+  claimId     String
+  claim       Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  origin      String
+  destination String
+  departureAt DateTime
+  returnAt    DateTime
+  mode        String
+  travelClass String?
+  distanceKm  Float?
+  ticketNumber String?
+  fare        Float   @default(0)
+  remarks     String?
+
+  @@index([claimId])
+}
+
+model ExpenseLine {
+  id             String   @id @default(cuid())
+  claimId        String
+  claim          Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  category       String
+  date           DateTime
+  description    String?
+  amount         Float
+  taxAmount      Float    @default(0)
+  eligibleAmount Float?
+  approvedAmount Float?
+
+  @@index([claimId])
+}
+
+model DACalculationLine {
+  id               String   @id @default(cuid())
+  claimId          String
+  claim            Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  locationCategory String
+  fromDate         DateTime
+  toDate           DateTime
+  durationDays     Float
+  rateApplied      Float
+  deduction        Float    @default(0)
+  entitledAmount   Float
+
+  @@index([claimId])
+}
+
+model FACalculationLine {
+  id               String   @id @default(cuid())
+  claimId          String
+  claim            Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  locationCategory String
+  fromDate         DateTime
+  toDate           DateTime
+  durationDays     Float
+  rateApplied      Float
+  deduction        Float    @default(0)
+  entitledAmount   Float
+
+  @@index([claimId])
+}
+
+model HACalculationLine {
+  id            String   @id @default(cuid())
+  claimId       String
+  claim         Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  holidayDate   DateTime
+  holidayType   String
+  workedHours   Float
+  isFullDay     Boolean  @default(true)
+  rateApplied   Float
+  multiplier    Float    @default(1)
+  payableAmount Float
+  evidenceNote  String?
+
+  @@index([claimId])
+}
+
+model Attachment {
+  id           String   @id @default(cuid())
+  claimId      String
+  claim        Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  filename     String
+  storagePath  String
+  mimeType     String
+  size         Int
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([claimId])
+}
+
+// Materialized approval path for a claim (built at submission time from
+// ApprovalStageRule), so tracking/history (FR-023) is a plain query.
+model ApprovalStep {
+  id           String    @id @default(cuid())
+  claimId      String
+  claim        Claim     @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  stageOrder   Int
+  requiredRole String
+  approverId   String?
+  approver     User?     @relation(fields: [approverId], references: [id])
+  // PENDING | APPROVED | RETURNED | REJECTED | SKIPPED
+  status       String    @default("PENDING")
+  comments     String?
+  actedAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([claimId, stageOrder])
+  @@index([approverId, status])
 }
 
 model Payment {
-  id        String        @id @default(cuid())
-  bill      Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
-  billId    String
-  amount    Float
-  method    PaymentMethod @default(CASH)
-  reference String?
-  paidAt    DateTime      @default(now())
-  notes     String?
-  createdAt DateTime      @default(now())
+  id      String @id @default(cuid())
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  // CASH | BANK_TRANSFER | CARD | MOBILE_BANKING | OTHER
+  method       String
+  reference    String?
+  batch        String?
+  amount       Float
+  // PENDING | PROCESSING | PAID | FAILED
+  status       String    @default("PENDING")
+  paidAt       DateTime?
+  recordedById String
+  recordedBy   User      @relation(fields: [recordedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([claimId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit & notifications
+// ---------------------------------------------------------------------------
+
+// Append-only; written exclusively via lib/audit.ts writeAudit().
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  beforeJson String?
+  afterJson  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id      String  @id @default(cuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id])
+  type    String
+  message String
+  claimId String?
+  claim   Claim?  @relation(fields: [claimId], references: [id])
+  read    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
 }

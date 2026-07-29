@@ -1,0 +1,173 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import {
+  addAttachment,
+  cancelClaim,
+  copyClaimAsDraft,
+  createDraftClaim,
+  recordPayment,
+  resubmitClaim,
+  submitClaim,
+  updateDraftClaim,
+  withdrawClaim,
+} from "@/lib/claims";
+import { actOnApprovalStep } from "@/lib/workflow";
+import { approvalActionSchema, newClaimSchema, paymentSchema } from "@/lib/validation";
+import { errorMessage, type ActionResult } from "@/lib/action-result";
+
+export async function createDraftClaimAction(input: unknown): Promise<ActionResult<{ claimId: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const parsed = newClaimSchema.parse(input);
+    const claim = await createDraftClaim(user.id, parsed);
+    revalidatePath("/claims");
+    return { ok: true, claimId: claim.id };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function updateDraftClaimAction(
+  claimId: string,
+  input: unknown,
+): Promise<ActionResult<{ claimId: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const parsed = newClaimSchema.parse(input);
+    await updateDraftClaim(claimId, user.id, parsed);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true, claimId };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function resubmitClaimAction(
+  claimId: string,
+  input: unknown,
+): Promise<ActionResult<{ claimId: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const parsed = newClaimSchema.parse(input);
+    await resubmitClaim(claimId, user.id, parsed);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true, claimId };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function submitClaimAction(claimId: string): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    await submitClaim(claimId, user.id);
+    revalidatePath(`/claims/${claimId}`);
+    revalidatePath("/claims");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function withdrawClaimAction(claimId: string): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    await withdrawClaim(claimId, user.id);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function cancelClaimAction(claimId: string, formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const reason = String(formData.get("reason") ?? "");
+    await cancelClaim(claimId, user.id, reason);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function copyClaimAction(claimId: string): Promise<ActionResult<{ claimId: string }>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const copy = await copyClaimAsDraft(claimId, user.id);
+    revalidatePath("/claims");
+    return { ok: true, claimId: copy.id };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function uploadAttachmentAction(claimId: string, formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      return { ok: false, error: "Choose a file to upload." };
+    }
+    await addAttachment(claimId, user.id, file);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function approvalActionOnStep(stepId: string, formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const parsed = approvalActionSchema.parse({
+      action: formData.get("action"),
+      comments: formData.get("comments") ?? undefined,
+      financeAdjustedAmount: formData.get("financeAdjustedAmount") || undefined,
+    });
+    const step = await prisma?.approvalStep.findUnique({ where: { id: stepId }, select: { claimId: true } });
+    await actOnApprovalStep({
+      stepId,
+      actingUserId: user.id,
+      action: parsed.action,
+      comments: parsed.comments,
+      financeAdjustedAmount: parsed.financeAdjustedAmount,
+    });
+    revalidatePath("/approvals");
+    if (step) revalidatePath(`/claims/${step.claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function recordPaymentAction(claimId: string, formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const parsed = paymentSchema.parse({
+      method: formData.get("method"),
+      reference: formData.get("reference") ?? undefined,
+      batch: formData.get("batch") ?? undefined,
+      amount: formData.get("amount"),
+    });
+    await recordPayment({ claimId, recordedById: user.id, ...parsed });
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
