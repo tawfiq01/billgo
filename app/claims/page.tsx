@@ -4,6 +4,9 @@ import { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { CLAIM_STATUSES, CLAIM_STATUS_LABELS, CLAIM_TYPES, ORG_WIDE_CLAIM_VIEW_ROLES, type ClaimStatus } from "@/lib/constants";
+import { ActionForm } from "@/components/action-form";
+import { SelectAllCheckbox } from "@/components/select-all-checkbox";
+import { deleteClaimsAction } from "@/app/claims/actions";
 
 const currency = new Intl.NumberFormat("en-BD", { style: "currency", currency: "BDT" });
 
@@ -35,6 +38,8 @@ export default async function ClaimsPage({
         take: 100,
       })
     : [];
+
+  const hasDeletableDrafts = claims.some((c) => c.employeeId === user.id && c.status === "DRAFT");
 
   return (
     <div>
@@ -80,43 +85,67 @@ export default async function ClaimsPage({
       </form>
 
       <div className="mt-6 overflow-x-auto">
-        <table className="table-base">
-          <thead>
-            <tr>
-              <th>Claim #</th>
-              {scope === "all" && <th>Employee</th>}
-              <th>Type</th>
-              <th>Purpose</th>
-              <th>Status</th>
-              <th>Claimed</th>
-              <th>Submitted</th>
-            </tr>
-          </thead>
-          <tbody>
-            {claims.map((c) => (
-              <tr key={c.id}>
-                <td>
-                  <Link href={`/claims/${c.id}`} className="text-accent hover:underline">
-                    {c.claimNumber ?? "(draft)"}
-                  </Link>
-                </td>
-                {scope === "all" && <td>{c.employee.name}</td>}
-                <td>{c.claimType}</td>
-                <td className="max-w-xs truncate">{c.purpose}</td>
-                <td>{CLAIM_STATUS_LABELS[c.status as ClaimStatus] ?? c.status}</td>
-                <td>{currency.format(c.totalClaimed)}</td>
-                <td>{c.submittedAt ? c.submittedAt.toLocaleDateString() : "—"}</td>
-              </tr>
-            ))}
-            {claims.length === 0 && (
+        <ActionForm
+          action={deleteClaimsAction}
+          confirmMessage="Delete the selected draft claims? This cannot be undone."
+        >
+          {hasDeletableDrafts && (
+            <div className="mb-3 flex justify-end">
+              <button type="submit" className="btn-danger text-sm">
+                Delete selected
+              </button>
+            </div>
+          )}
+          <table className="table-base">
+            <thead>
               <tr>
-                <td colSpan={scope === "all" ? 7 : 6} className="py-6 text-center text-muted">
-                  No claims found.
-                </td>
+                {hasDeletableDrafts && (
+                  <th>
+                    <SelectAllCheckbox />
+                  </th>
+                )}
+                <th>Claim #</th>
+                {scope === "all" && <th>Employee</th>}
+                <th>Type</th>
+                <th>Purpose</th>
+                <th>Status</th>
+                <th>Claimed</th>
+                <th>Submitted</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {claims.map((c) => {
+                const deletable = c.employeeId === user.id && c.status === "DRAFT";
+                return (
+                  <tr key={c.id}>
+                    {hasDeletableDrafts && <td>{deletable && <input type="checkbox" name="ids" value={c.id} />}</td>}
+                    <td>
+                      <Link href={`/claims/${c.id}`} className="text-accent hover:underline">
+                        {c.claimNumber ?? "(draft)"}
+                      </Link>
+                    </td>
+                    {scope === "all" && <td>{c.employee.name}</td>}
+                    <td>{c.claimType}</td>
+                    <td className="max-w-xs truncate">{c.purpose}</td>
+                    <td>{CLAIM_STATUS_LABELS[c.status as ClaimStatus] ?? c.status}</td>
+                    <td>{currency.format(c.totalClaimed)}</td>
+                    <td>{c.submittedAt ? c.submittedAt.toLocaleDateString() : "—"}</td>
+                  </tr>
+                );
+              })}
+              {claims.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={(scope === "all" ? 7 : 6) + (hasDeletableDrafts ? 1 : 0)}
+                    className="py-6 text-center text-muted"
+                  >
+                    No claims found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </ActionForm>
       </div>
     </div>
   );

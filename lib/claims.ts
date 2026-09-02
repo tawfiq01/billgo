@@ -1,8 +1,8 @@
 import { prisma } from "./db";
 import { writeAudit } from "./audit";
 import { notify } from "./notifications";
-import { saveAttachment } from "./storage";
-import { buildApprovalSteps, reopenCurrentStage } from "./workflow";
+import { deleteAttachmentFile, saveAttachment } from "./storage";
+import { buildApprovalSteps, notifyPaymentProcessors, reopenCurrentStage } from "./workflow";
 import { calculateDA, calculateFA, calculateHA } from "./calculations";
 import type { NewClaimInput } from "./validation";
 
@@ -264,6 +264,46 @@ export async function withdrawClaim(claimId: string, employeeId: string): Promis
   await writeAudit({ userId: employeeId, action: "CLAIM_WITHDRAWN", entityType: "Claim", entityId: claimId });
 }
 
+// A draft was never submitted, so it has no claim number, approval steps, or
+// payments to preserve — unlike withdrawClaim (which only cancels), this
+// removes the row entirely.
+export async function deleteDraftClaim(claimId: string, employeeId: string): Promise<void> {
+  if (!prisma) throw new ClaimError("Database not configured");
+  const claim = await prisma.claim.findUniqueOrThrow({ where: { id: claimId }, include: { attachments: true } });
+  if (claim.employeeId !== employeeId) throw new ClaimError("You can only delete your own claims.");
+  if (claim.status !== "DRAFT") throw new ClaimError("Only draft claims can be deleted.");
+
+  for (const attachment of claim.attachments) {
+    await deleteAttachmentFile(attachment.storagePath);
+  }
+  await prisma.claim.delete({ where: { id: claimId } });
+
+  await writeAudit({
+    userId: employeeId,
+    action: "CLAIM_DRAFT_DELETED",
+    entityType: "Claim",
+    entityId: claimId,
+    before: { claimType: claim.claimType, purpose: claim.purpose, totalClaimed: claim.totalClaimed },
+  });
+}
+
+// Bulk variant for the claims list checkboxes — reuses the same rules as
+// deleteDraftClaim per id, but skips (rather than aborts on) any id that
+// isn't actually the caller's own draft, since a tampered request could
+// otherwise fail the whole batch on one bad id.
+export async function deleteDraftClaims(claimIds: string[], employeeId: string): Promise<{ deleted: number }> {
+  let deleted = 0;
+  for (const claimId of claimIds) {
+    try {
+      await deleteDraftClaim(claimId, employeeId);
+      deleted++;
+    } catch {
+      // not a draft, not owned by this user, or already gone — skip it.
+    }
+  }
+  return { deleted };
+}
+
 // Administrative cancellation with reason, at any pre-payment stage.
 export async function cancelClaim(claimId: string, actingUserId: string, reason: string): Promise<void> {
   if (!prisma) throw new ClaimError("Database not configured");
@@ -448,6 +488,31 @@ export async function addAttachment(claimId: string, uploadedById: string, file:
   return attachment;
 }
 
+export async function deleteAttachment(attachmentId: string, actingUserId: string): Promise<{ claimId: string }> {
+  if (!prisma) throw new ClaimError("Database not configured");
+  const attachment = await prisma.attachment.findUniqueOrThrow({
+    where: { id: attachmentId },
+    include: { claim: true },
+  });
+  if (attachment.claim.employeeId !== actingUserId || attachment.claim.status !== "DRAFT") {
+    // Same rule as adding one — see addAttachment above.
+    throw new ClaimError("Attachments can only be removed by the claimant while the claim is a draft.");
+  }
+
+  await prisma.attachment.delete({ where: { id: attachmentId } });
+  await deleteAttachmentFile(attachment.storagePath);
+
+  await writeAudit({
+    userId: actingUserId,
+    action: "ATTACHMENT_REMOVED",
+    entityType: "Claim",
+    entityId: attachment.claimId,
+    before: { filename: attachment.filename },
+  });
+
+  return { claimId: attachment.claimId };
+}
+
 export type RecordPaymentInput = {
   claimId: string;
   recordedById: string;
@@ -531,6 +596,7 @@ export async function reopenClaim(claimId: string, actingUserId: string, reason:
     message: `Your claim ${claim.claimNumber ?? claim.id} was reopened: ${reason}`,
     claimId,
   });
+  await notifyPaymentProcessors(claimId, claim.claimNumber);
   await writeAudit({
     userId: actingUserId,
     action: "CLAIM_REOPENED",

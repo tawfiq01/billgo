@@ -20,6 +20,24 @@ async function applyDelegation(
 
 export class WorkflowError extends Error {}
 
+// A claim reaching APPROVED is only ever notified to the claimant today —
+// nothing tells the Payment Processor a claim is now waiting on them, so it
+// only surfaces if they happen to browse All Claims and filter by status.
+export async function notifyPaymentProcessors(claimId: string, claimNumber: string | null): Promise<void> {
+  if (!prisma) return;
+  const processors = await prisma.user.findMany({ where: { role: "PAYMENT_PROCESSOR", status: "ACTIVE" } });
+  await Promise.all(
+    processors.map((p) =>
+      notify({
+        userId: p.id,
+        type: "CLAIM_READY_FOR_PAYMENT",
+        message: `Claim ${claimNumber ?? claimId} is fully approved and ready for payment.`,
+        claimId,
+      }),
+    ),
+  );
+}
+
 type ApproverContext = {
   employee: { managerId: string | null; departmentId: string | null; divisionId: string | null };
   projectId: string | null;
@@ -176,6 +194,7 @@ export async function buildApprovalSteps(claimId: string, actingUserId: string):
       message: `Your claim ${claim.claimNumber ?? claim.id} has been auto-approved (no applicable approval stages) and is ready for payment.`,
       claimId,
     });
+    await notifyPaymentProcessors(claimId, claim.claimNumber);
   }
 
   await writeAudit({
@@ -273,6 +292,7 @@ export async function actOnApprovalStep(input: ApprovalActionInput): Promise<voi
         message: `Your claim ${step.claim.claimNumber ?? step.claim.id} has been fully approved and is ready for payment.`,
         claimId: step.claim.id,
       });
+      await notifyPaymentProcessors(step.claim.id, step.claim.claimNumber);
     }
   } else if (input.action === "RETURN") {
     await prisma.approvalStep.update({

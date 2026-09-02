@@ -1,17 +1,38 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { STAGE_ROLE_LABELS, type StageRole } from "@/lib/constants";
+import { CLAIM_TYPES, STAGE_ROLES, STAGE_ROLE_LABELS, type StageRole } from "@/lib/constants";
 import { getBulkApproveThreshold } from "@/lib/workflow";
 import { ActionForm } from "@/components/action-form";
 import { bulkApproveAction } from "./actions";
 
 const currency = new Intl.NumberFormat("en-BD", { style: "currency", currency: "BDT" });
 
-export default async function ApprovalsPage() {
+export default async function ApprovalsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; claimType?: string; stage?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const params = await searchParams;
+
+  const where: Prisma.ApprovalStepWhereInput = { approverId: user.id, status: "PENDING" };
+  if (params.stage) where.requiredRole = params.stage;
+  const claimFilters: Prisma.ClaimWhereInput = {};
+  if (params.claimType) claimFilters.claimType = params.claimType;
+  if (params.q) {
+    claimFilters.OR = [
+      { claimNumber: { contains: params.q } },
+      { purpose: { contains: params.q } },
+      { employee: { name: { contains: params.q } } },
+    ];
+  }
+  if (Object.keys(claimFilters).length > 0) where.claim = claimFilters;
+  const hasFilters = Boolean(params.q || params.claimType || params.stage);
 
   // Approvers are resolved by relationship (reporting manager, department/
   // division head, project manager) or by Role (Finance/Final Approver), so
@@ -20,7 +41,7 @@ export default async function ApprovalsPage() {
   const [steps, bulkThreshold] = prisma
     ? await Promise.all([
         prisma.approvalStep.findMany({
-          where: { approverId: user.id, status: "PENDING" },
+          where,
           include: { claim: { include: { employee: true } } },
           orderBy: { createdAt: "asc" },
         }),
@@ -32,6 +53,34 @@ export default async function ApprovalsPage() {
     <div>
       <h1 className="text-xl font-semibold">Approvals</h1>
       <p className="mt-1 text-sm text-muted">Claims currently awaiting your review.</p>
+
+      <form className="mt-4 flex flex-wrap gap-3" method="get">
+        <input suppressHydrationWarning
+          name="q"
+          placeholder="Search claim #, employee, or purpose"
+          defaultValue={params.q ?? ""}
+          className="field-input w-auto"
+        />
+        <select name="claimType" defaultValue={params.claimType ?? ""} className="field-input w-auto">
+          <option value="">All types</option>
+          {CLAIM_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <select name="stage" defaultValue={params.stage ?? ""} className="field-input w-auto">
+          <option value="">All stages</option>
+          {STAGE_ROLES.map((s) => (
+            <option key={s} value={s}>
+              {STAGE_ROLE_LABELS[s]}
+            </option>
+          ))}
+        </select>
+        <button className="btn-secondary" type="submit">
+          Filter
+        </button>
+      </form>
 
       <ActionForm action={bulkApproveAction} className="mt-6 overflow-x-auto">
         <p className="mb-2 text-xs text-muted">
@@ -85,7 +134,7 @@ export default async function ApprovalsPage() {
             {steps.length === 0 && (
               <tr>
                 <td colSpan={9} className="py-6 text-center text-muted">
-                  Nothing pending — you&apos;re all caught up.
+                  {hasFilters ? "No approvals match your filters." : "Nothing pending — you're all caught up."}
                 </td>
               </tr>
             )}

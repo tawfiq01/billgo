@@ -15,6 +15,8 @@ import {
   approvalActionOnStep,
   cancelClaimAction,
   copyClaimAction,
+  deleteAttachmentAction,
+  deleteClaimAction,
   recordPaymentAction,
   reopenClaimAction,
   submitClaimAction,
@@ -22,6 +24,7 @@ import {
   withdrawClaimAction,
 } from "@/app/claims/actions";
 import { NavigateOnSuccessButton } from "./navigate-on-success-button";
+import { DeleteDraftButton } from "./delete-draft-button";
 import { PrintButton } from "@/components/print-button";
 
 const currency = new Intl.NumberFormat("en-BD", { style: "currency", currency: "BDT" });
@@ -232,13 +235,24 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
         <h2 className="text-sm font-semibold">Attachments</h2>
         <ul className="mt-2 space-y-1 text-sm">
           {claim.attachments.map((a) => (
-            <li key={a.id}>
+            <li key={a.id} className="flex items-center gap-2">
               <a href={`/api/attachments/${a.id}`} className="text-accent hover:underline">
                 {a.filename}
-              </a>{" "}
+              </a>
               <span className="text-xs text-muted">
                 uploaded by {a.uploadedBy.name} on {dateFmt(a.createdAt)}
               </span>
+              {isOwner && claim.status === "DRAFT" && (
+                <ActionForm
+                  action={deleteAttachmentAction.bind(null, a.id)}
+                  className="print:hidden"
+                  confirmMessage={`Delete "${a.filename}"?`}
+                >
+                  <button type="submit" className="text-xs text-danger hover:underline">
+                    Delete
+                  </button>
+                </ActionForm>
+              )}
             </li>
           ))}
           {claim.attachments.length === 0 && <li className="text-muted">No attachments yet.</li>}
@@ -249,7 +263,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
             action={uploadAttachmentAction.bind(null, claim.id)}
             className="mt-4 flex items-center gap-3 print:hidden"
           >
-            <input suppressHydrationWarning type="file" name="file" required className="text-sm" />
+            <input suppressHydrationWarning type="file" name="file" required className="file-input" />
             <button type="submit" className="btn-secondary">
               Upload
             </button>
@@ -312,11 +326,7 @@ export default async function ClaimDetailPage({ params }: { params: Promise<{ id
                 Submit claim
               </button>
             </ActionForm>
-            <ActionForm action={withdrawClaimAction.bind(null, claim.id)} confirmMessage="Discard this draft?">
-              <button type="submit" className="btn-danger">
-                Discard draft
-              </button>
-            </ActionForm>
+            <DeleteDraftButton action={deleteClaimAction.bind(null, claim.id)} />
           </>
         )}
 

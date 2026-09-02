@@ -8,6 +8,9 @@ import {
   cancelClaim,
   copyClaimAsDraft,
   createDraftClaim,
+  deleteAttachment,
+  deleteDraftClaim,
+  deleteDraftClaims,
   recordPayment,
   reopenClaim,
   resubmitClaim,
@@ -25,6 +28,7 @@ export async function createDraftClaimAction(input: unknown): Promise<ActionResu
     const user = await getCurrentUser();
     if (!user) return { ok: false, error: "Not authenticated." };
     const parsed = newClaimSchema.parse(input);
+    if (!parsed.projectId) return { ok: false, error: "Project is required." };
     const claim = await createDraftClaim(user.id, parsed);
     revalidatePath("/claims");
     return { ok: true, claimId: claim.id };
@@ -41,6 +45,7 @@ export async function updateDraftClaimAction(
     const user = await getCurrentUser();
     if (!user) return { ok: false, error: "Not authenticated." };
     const parsed = newClaimSchema.parse(input);
+    if (!parsed.projectId) return { ok: false, error: "Project is required." };
     await updateDraftClaim(claimId, user.id, parsed);
     revalidatePath(`/claims/${claimId}`);
     return { ok: true, claimId };
@@ -57,6 +62,7 @@ export async function resubmitClaimAction(
     const user = await getCurrentUser();
     if (!user) return { ok: false, error: "Not authenticated." };
     const parsed = newClaimSchema.parse(input);
+    if (!parsed.projectId) return { ok: false, error: "Project is required." };
     await resubmitClaim(claimId, user.id, parsed);
     revalidatePath(`/claims/${claimId}`);
     return { ok: true, claimId };
@@ -71,6 +77,33 @@ export async function submitClaimAction(claimId: string): Promise<ActionResult> 
     if (!user) return { ok: false, error: "Not authenticated." };
     await submitClaim(claimId, user.id);
     revalidatePath(`/claims/${claimId}`);
+    revalidatePath("/claims");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function deleteClaimAction(claimId: string): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    await deleteDraftClaim(claimId, user.id);
+    revalidatePath("/claims");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function deleteClaimsAction(formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const ids = formData.getAll("ids").map(String).filter(Boolean);
+    if (ids.length === 0) return { ok: false, error: "Select at least one draft to delete." };
+    const { deleted } = await deleteDraftClaims(ids, user.id);
+    if (deleted === 0) return { ok: false, error: "Could not delete the selected drafts." };
     revalidatePath("/claims");
     return { ok: true };
   } catch (err) {
@@ -145,6 +178,18 @@ export async function uploadAttachmentAction(claimId: string, formData: FormData
       return { ok: false, error: "Choose a file to upload." };
     }
     await addAttachment(claimId, user.id, file);
+    revalidatePath(`/claims/${claimId}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+}
+
+export async function deleteAttachmentAction(attachmentId: string): Promise<ActionResult> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return { ok: false, error: "Not authenticated." };
+    const { claimId } = await deleteAttachment(attachmentId, user.id);
     revalidatePath(`/claims/${claimId}`);
     return { ok: true };
   } catch (err) {

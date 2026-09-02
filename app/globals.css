@@ -35,6 +35,14 @@ body {
   font-family: var(--font-inter), Arial, Helvetica, sans-serif;
 }
 
+@layer base {
+  /* Browsers don't show a pointer cursor on <button> by default (unlike
+     links) — every clickable button in the app should look clickable. */
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 @layer components {
   .btn-primary,
   .btn-secondary,
@@ -55,6 +63,9 @@ body {
   }
   .field-input {
     @apply mt-1 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-accent;
+  }
+  .file-input {
+    @apply text-sm text-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-border file:bg-card file:px-3.5 file:py-2 file:text-sm file:font-medium file:text-foreground file:transition-colors hover:file:bg-background;
   }
   .card {
     @apply rounded-xl border border-border bg-card p-5;
