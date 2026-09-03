@@ -2,17 +2,17 @@
 // System — see docs/BRD.md and the Phase 1 plan for the full requirements this
 // maps to.
 //
-// Provider is sqlite for Phase 1 (zero-setup local dev — see lib/db.ts).
-// SQLite has no native enum type, so "enum-like" fields below are plain
-// String columns; allowed values are documented inline and enforced in
-// lib/constants.ts + zod schemas at the application layer.
+// Provider is postgresql (see compose.yaml / lib/db.ts). "Enum-like" fields
+// below are kept as plain String columns rather than native enums; allowed
+// values are documented inline and enforced in lib/constants.ts + zod schemas
+// at the application layer.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // ---------------------------------------------------------------------------
